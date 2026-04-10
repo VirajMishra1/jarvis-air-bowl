@@ -3,7 +3,7 @@ import { useBox } from '@react-three/cannon';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 
-const HoloBlock = ({ position, args, index }) => {
+const HoloBlock = ({ position, args }) => {
   const [ref] = useBox(() => ({
     type: 'Static',
     position,
@@ -65,7 +65,7 @@ const HoloLane = () => {
         });
     }
     return b;
-  }, []);
+  }, [segmentLength, segments, startZ]);
 
   return (
     <group>

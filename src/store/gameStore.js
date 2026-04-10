@@ -1,132 +1,403 @@
 import { create } from 'zustand';
 
-const useGameStore = create((set) => ({
-  // Game Status
-  gameStatus: 'CALIBRATION', // CALIBRATION, PLAYING, THROWN, SCORING, FINISHED
-  
-  // Ball State
-  ballState: 'HIDDEN', // HIDDEN, LOCKED, HELD, THROWN
-  activeHand: null, // 'right', 'left', or null
-  ballPosition: [0, 0.5, 5], // Start position (at the beginning of lane)
-  ballVelocity: [0, 0, 0],
-  ballSpin: [0, 0, 0], // Changed to Vector3 [x, y, z]
-  
-  // Hand State (for UI/Debugging)
-  // Right Hand (Ball Control)
-  rightHand: {
-    present: false,
-    position: { x: 0, y: 0 },
-    landmarks: [],
+export const BASE_LANE_SCALE = 1.8;
+export const MIN_BALL_SIZE = 0.41;
+export const ballSizeFromLaneScale = (scale) => Math.max(0.23 * scale, MIN_BALL_SIZE);
+
+const FULL_PIN_IDS = Array.from({ length: 10 }, (_, index) => index);
+
+const defaultHandState = {
+  present: false,
+  position: { x: 0.5, y: 0.5 },
+  landmarks: [],
+  speed: 0,
+  gesture: 'OPEN',
+  roll: 0,
+  releasePosition: null,
+  release: {
     speed: 0,
-    gesture: 'OPEN',
-    roll: 0
+    roll: 0,
+    averagedVelocity: { x: 0, y: 0, z: 0 },
+    peakVelocity: { x: 0, y: 0, z: 0 },
   },
-  // Left Hand (Scale/Settings Control)
-  leftHand: {
-    present: false,
-    position: { x: 0, y: 0 },
-    landmarks: [],
-    gesture: 'OPEN',
-    speed: 0
-  },
-  // Pose (Shoulder/Elbow)
-  pose: {
-    rightShoulder: null,
-    rightElbow: null,
-    leftShoulder: null,
-    leftElbow: null
-  },
+};
 
-  // Game Settings (Controlled by Left Hand)
-  gameSettings: {
-    ballSize: 0.3, // Radius
-    pinScale: 2.0, // Start bigger
-  },
+const defaultPose = {
+  rightShoulder: null,
+  rightElbow: null,
+  leftShoulder: null,
+  leftElbow: null,
+};
 
-  updateHands: (right, left) => set({
-      rightHand: { ...right },
-      leftHand: { ...left }
-  }),
+const defaultCalibration = {
+  active: true,
+  scale: 1,
+  rotationX: -0.1,
+  height: -1.5,
+};
 
-  updatePose: (poseData) => set({ pose: poseData }),
-  
-  updateSettings: (settings) => set((state) => ({
-      gameSettings: { ...state.gameSettings, ...settings }
-  })),
-  
-  // Score
-  score: 0,
-  pinsKnocked: 0,
-  roundId: 0, // Used to force-reset pins
-  
-  // Calibration State
-  calibration: {
-    active: true, // Start in calibration mode
-    scale: 1,
-    rotationX: -0.1, // Slight tilt
-    height: -1.5,
-  },
-  pinScaleLocked: false, // Lock pin resizing after setup
+const defaultSettings = {
+  ballSize: ballSizeFromLaneScale(BASE_LANE_SCALE),
+  pinScale: BASE_LANE_SCALE,
+};
 
-  setCalibration: (updates) => set((state) => ({ 
-    calibration: { ...state.calibration, ...updates } 
-  })),
+const createEmptyFrames = () => Array.from({ length: 10 }, () => ({ rolls: [] }));
 
-  // Actions
+const formatPins = (pins) => {
+  if (pins == null) return '';
+  return pins === 0 ? '-' : String(pins);
+};
+
+const isTenthFrameComplete = (rolls) => {
+  if (rolls.length < 2) return false;
+  if (rolls[0] === 10 || rolls[0] + rolls[1] === 10) {
+    return rolls.length >= 3;
+  }
+  return rolls.length >= 2;
+};
+
+const getNextRolls = (frames, frameIndex) => frames.slice(frameIndex + 1).flatMap((frame) => frame.rolls);
+
+const buildFrameMarks = (rolls, frameIndex) => {
+  if (frameIndex < 9) {
+    const [first, second] = rolls;
+    if (first === 10) {
+      return ['X', ''];
+    }
+
+    return [
+      first == null ? '' : formatPins(first),
+      second == null ? '' : first + second === 10 ? '/' : formatPins(second),
+    ];
+  }
+
+  const [first, second, third] = rolls;
+  const marks = ['', '', ''];
+
+  if (first != null) {
+    marks[0] = first === 10 ? 'X' : formatPins(first);
+  }
+
+  if (second != null) {
+    if (first === 10) {
+      marks[1] = second === 10 ? 'X' : formatPins(second);
+    } else {
+      marks[1] = first + second === 10 ? '/' : formatPins(second);
+    }
+  }
+
+  if (third != null) {
+    if (first === 10 && second === 10) {
+      marks[2] = third === 10 ? 'X' : formatPins(third);
+    } else if (first === 10 && second + third === 10) {
+      marks[2] = '/';
+    } else {
+      marks[2] = third === 10 ? 'X' : formatPins(third);
+    }
+  }
+
+  return marks;
+};
+
+const buildScoreboard = (frames) => {
+  let runningTotal = 0;
+
+  return frames.map((frame, index) => {
+    const rolls = frame.rolls;
+    let frameScore = null;
+
+    if (index < 9) {
+      const [first = null, second = null] = rolls;
+      const nextRolls = getNextRolls(frames, index);
+
+      if (first === 10) {
+        if (nextRolls.length >= 2) {
+          frameScore = 10 + nextRolls[0] + nextRolls[1];
+        }
+      } else if (second != null) {
+        if (first + second === 10) {
+          if (nextRolls.length >= 1) {
+            frameScore = 10 + nextRolls[0];
+          }
+        } else {
+          frameScore = first + second;
+        }
+      }
+    } else if (isTenthFrameComplete(rolls)) {
+      frameScore = rolls.reduce((sum, pins) => sum + pins, 0);
+    }
+
+    if (frameScore != null) {
+      runningTotal += frameScore;
+    }
+
+    return {
+      index,
+      rolls,
+      marks: buildFrameMarks(rolls, index),
+      frameScore,
+      cumulative: frameScore != null ? runningTotal : null,
+      complete: index < 9 ? rolls[0] === 10 || rolls.length >= 2 : isTenthFrameComplete(rolls),
+    };
+  });
+};
+
+const getTotalScore = (scoreboard) =>
+  scoreboard.reduce((latest, frame) => (frame.cumulative == null ? latest : frame.cumulative), 0);
+
+const createBowlingState = (overrides = {}) => {
+  const frames = createEmptyFrames();
+  const scoreboard = buildScoreboard(frames);
+
+  return {
+    frames,
+    scoreboard,
+    score: 0,
+    currentFrame: 0,
+    standingPinIds: FULL_PIN_IDS,
+    pinRackId: 0,
+    lastPinsKnocked: 0,
+    lastRollSummary: 'Frame 1, ball 1 ready.',
+    ...overrides,
+  };
+};
+
+const useGameStore = create((set) => ({
+  gameStatus: 'CALIBRATION',
+  ballState: 'HIDDEN',
+  activeHand: null,
+  ballPosition: [0, 0.5, 5],
+  ballVelocity: [0, 0, 0],
+  ballSpin: [0, 0, 0],
+  rightHand: defaultHandState,
+  leftHand: defaultHandState,
+  pose: defaultPose,
+  gameSettings: defaultSettings,
+  calibration: defaultCalibration,
+  pinScaleLocked: false,
+  trackingStatus: 'idle',
+  trackingError: '',
+  debugEnabled: false,
+  ...createBowlingState(),
+
+  updateHands: (right, left) =>
+    set({
+      rightHand: { ...defaultHandState, ...right },
+      leftHand: { ...defaultHandState, ...left },
+    }),
+
+  updatePose: (poseData) => set({ pose: { ...defaultPose, ...poseData } }),
+
+  updateSettings: (settings) =>
+    set((state) => ({
+      gameSettings: { ...state.gameSettings, ...settings },
+    })),
+
+  setCalibration: (updates) =>
+    set((state) => ({
+      calibration: { ...state.calibration, ...updates },
+    })),
+
+  setTrackingStatus: (trackingStatus) => set({ trackingStatus }),
+  setTrackingError: (trackingError) => set({ trackingError }),
+  toggleDebug: () => set((state) => ({ debugEnabled: !state.debugEnabled })),
+
   setGameStatus: (status) => set({ gameStatus: status }),
   setBallState: (state) => set({ ballState: state }),
   setActiveHand: (hand) => set({ activeHand: hand }),
-  
-  // New Action: Lock Calibration
-  lockCalibration: () => set({ 
-      gameStatus: 'PLAYING', 
-      ballState: 'LOCKED', // Wait for release
-      pinScaleLocked: true
-  }),
 
-  // Deprecated: updateHand (Kept for compatibility if needed, but unused)
-  updateHand: (x, y, speed, gesture, landmarks) => {},
-  
-  throwBall: (velocity, spin) => set({ 
-    ballState: 'THROWN', 
-    gameStatus: 'THROWN',
-    ballVelocity: velocity,
-    ballSpin: spin
-  }),
-  
-  resetBall: () => set({ 
-    ballState: 'HELD', 
-    gameStatus: 'PLAYING',
-    ballVelocity: [0, 0, 0],
-    ballSpin: [0, 0, 0],
-    ballPosition: [0, 0.5, 5]
-  }),
-  
-  setScore: (pins) => set((state) => ({ 
-    pinsKnocked: pins,
-    score: state.score + pins,
-    gameStatus: 'FINISHED'
-  })),
+  lockCalibration: () =>
+    set((state) => ({
+      gameStatus: 'PLAYING',
+      ballState: 'LOCKED',
+      activeHand: null,
+      pinScaleLocked: true,
+      calibration: { ...state.calibration, active: false },
+      ...createBowlingState(),
+    })),
 
-  nextRound: () => set((state) => ({
-    roundId: state.roundId + 1,
-    gameStatus: 'PLAYING',
-    ballState: 'HELD',
-    ballVelocity: [0, 0, 0],
-    ballSpin: [0, 0, 0],
-    activeHand: 'right' // Default back to right hand
-  })),
+  completeCalibration: () =>
+    set((state) => ({
+      gameStatus: 'PLAYING',
+      ballState: 'LOCKED',
+      activeHand: null,
+      pinScaleLocked: true,
+      calibration: { ...state.calibration, active: false },
+      ...createBowlingState(),
+    })),
 
-  resetGame: () => set({
-    gameStatus: 'CALIBRATION',
-    ballState: 'HIDDEN',
-    pinScaleLocked: false,
-    score: 0,
-    pinsKnocked: 0,
-    roundId: 0,
-    ballVelocity: [0, 0, 0],
-    ballPosition: [0, 0.5, 5]
-  })
+  restartBowling: () =>
+    set((state) => ({
+      gameStatus: 'PLAYING',
+      ballState: 'LOCKED',
+      activeHand: null,
+      ballVelocity: [0, 0, 0],
+      ballSpin: [0, 0, 0],
+      ballPosition: [0, 0.5, 5],
+      ...createBowlingState({ pinRackId: state.pinRackId + 1 }),
+    })),
+
+  resetCalibration: () =>
+    set(() => ({
+      calibration: defaultCalibration,
+      gameSettings: defaultSettings,
+      pinScaleLocked: false,
+      gameStatus: 'CALIBRATION',
+      ballState: 'HIDDEN',
+      activeHand: null,
+      ballVelocity: [0, 0, 0],
+      ballSpin: [0, 0, 0],
+      ballPosition: [0, 0.5, 5],
+      ...createBowlingState(),
+    })),
+
+  updateHand: () => {},
+
+  throwBall: (velocity, spin, position = null) =>
+    set({
+      ballState: 'THROWN',
+      gameStatus: 'THROWN',
+      ballPosition: position || [0, 0.5, 5],
+      ballVelocity: velocity,
+      ballSpin: spin,
+    }),
+
+  resetBall: () =>
+    set((state) => ({
+      ballState: 'LOCKED',
+      gameStatus: state.currentFrame >= 10 ? 'GAME_OVER' : 'PLAYING',
+      activeHand: null,
+      ballVelocity: [0, 0, 0],
+      ballSpin: [0, 0, 0],
+      ballPosition: [0, Math.max(state.gameSettings.ballSize, 0.3), 4],
+    })),
+
+  recordRoll: (knockedPinIds) =>
+    set((state) => {
+      if (state.currentFrame >= 10 || state.gameStatus === 'CALIBRATION') {
+        return {};
+      }
+
+      const frameIndex = state.currentFrame;
+      const frame = state.frames[frameIndex];
+      if (!frame) {
+        return {};
+      }
+
+      const standingSet = new Set(state.standingPinIds);
+      const uniqueKnocked = [...new Set(knockedPinIds)].filter((pinId) => standingSet.has(pinId));
+      const pinsDown = uniqueKnocked.length;
+      const nextFrames = state.frames.map((entry, index) =>
+        index === frameIndex ? { ...entry, rolls: [...entry.rolls, pinsDown] } : { ...entry },
+      );
+      const currentRolls = nextFrames[frameIndex].rolls;
+      const scoreboard = buildScoreboard(nextFrames);
+      const score = getTotalScore(scoreboard);
+
+      let currentFrame = frameIndex;
+      let standingPinIds = state.standingPinIds.filter((pinId) => !uniqueKnocked.includes(pinId));
+      let pinRackId = state.pinRackId;
+      let gameStatus = 'PLAYING';
+      let lastRollSummary = `${pinsDown} pins down.`;
+
+      if (frameIndex < 9) {
+        if (currentRolls.length === 1) {
+          if (pinsDown === 10) {
+            currentFrame = frameIndex + 1;
+            standingPinIds = FULL_PIN_IDS;
+            pinRackId += 1;
+            lastRollSummary = `Strike on frame ${frameIndex + 1}.`;
+          } else {
+            pinRackId += 1;
+            lastRollSummary =
+              pinsDown === 0
+                ? `Frame ${frameIndex + 1}, ball 2 ready.`
+                : `${pinsDown} pin${pinsDown === 1 ? '' : 's'} down. Ball 2 ready.`;
+          }
+        } else {
+          const frameTotal = currentRolls[0] + currentRolls[1];
+          currentFrame = frameIndex + 1;
+          standingPinIds = FULL_PIN_IDS;
+          pinRackId += 1;
+          lastRollSummary =
+            frameTotal === 10
+              ? `Spare on frame ${frameIndex + 1}.`
+              : `Frame ${frameIndex + 1} closes at ${frameTotal}.`;
+        }
+      } else if (currentRolls.length === 1) {
+        if (pinsDown === 10) {
+          standingPinIds = FULL_PIN_IDS;
+          pinRackId += 1;
+          lastRollSummary = 'Strike in the tenth. Two fill balls remain.';
+        } else {
+          pinRackId += 1;
+          lastRollSummary = `${pinsDown} pin${pinsDown === 1 ? '' : 's'} down. Final frame ball 2 ready.`;
+        }
+      } else if (currentRolls.length === 2) {
+        const [first, second] = currentRolls;
+
+        if (first === 10) {
+          pinRackId += 1;
+          if (second === 10) {
+            standingPinIds = FULL_PIN_IDS;
+            lastRollSummary = 'Back-to-back strikes in the tenth. One more ball.';
+          } else {
+            standingPinIds = FULL_PIN_IDS.filter((pinId) => !uniqueKnocked.includes(pinId));
+            lastRollSummary = 'One fill ball left.';
+          }
+        } else if (first + second === 10) {
+          standingPinIds = FULL_PIN_IDS;
+          pinRackId += 1;
+          lastRollSummary = 'Spare in the tenth. One fill ball left.';
+        } else {
+          currentFrame = 10;
+          gameStatus = 'GAME_OVER';
+          lastRollSummary = `Game complete. Final frame totals ${first + second}.`;
+        }
+      } else {
+        currentFrame = 10;
+        gameStatus = 'GAME_OVER';
+        lastRollSummary = 'Game complete. Final score locked in.';
+      }
+
+      if (currentFrame >= 10) {
+        gameStatus = 'GAME_OVER';
+      }
+
+      return {
+        frames: nextFrames,
+        scoreboard,
+        score,
+        currentFrame,
+        standingPinIds,
+        pinRackId,
+        lastPinsKnocked: pinsDown,
+        lastRollSummary,
+        gameStatus,
+        ballState: 'LOCKED',
+        activeHand: null,
+        ballVelocity: [0, 0, 0],
+        ballSpin: [0, 0, 0],
+      };
+    }),
+
+  resetGame: () =>
+    set(() => ({
+      gameStatus: 'CALIBRATION',
+      ballState: 'HIDDEN',
+      activeHand: null,
+      pinScaleLocked: false,
+      ballVelocity: [0, 0, 0],
+      ballSpin: [0, 0, 0],
+      ballPosition: [0, 0.5, 5],
+      rightHand: defaultHandState,
+      leftHand: defaultHandState,
+      pose: defaultPose,
+      calibration: defaultCalibration,
+      trackingStatus: 'idle',
+      trackingError: '',
+      ...createBowlingState(),
+    })),
 }));
 
 export default useGameStore;

@@ -1,16 +1,77 @@
-# React + Vite
+# Jarvis Air Bowl
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Jarvis Air Bowl is a gesture-controlled mixed-reality bowling prototype built with React, Vite, Three.js, React Three Fiber, Cannon physics, Zustand, and MediaPipe hand/pose tracking.
 
-Currently, two official plugins are available:
+## Stack
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+- React 18 + Vite 5
+- Three.js + React Three Fiber + Drei
+- Cannon physics via `@react-three/cannon`
+- Zustand for game state
+- MediaPipe Hands + Pose for camera tracking
+- ESLint 9 flat config
 
-## React Compiler
+## Local Setup
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+1. Install dependencies with `npm install`.
+2. Start the dev server with `npm run dev`.
+3. Allow camera access when the browser prompts you.
+4. Stand far enough back to keep both hands and shoulders visible.
 
-## Expanding the ESLint configuration
+Helpful scripts:
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+- `npm run dev:host` exposes the dev server on your local network.
+- `npm run lint` runs the ESLint checks.
+- `npm run build` creates a production build in `dist/`.
+- `npm run check` runs lint and build together.
+
+## Gameplay Flow
+
+1. Enter calibration mode on load.
+2. Raise or lower your left fist to resize the lane and pins to your room.
+3. Fine tune tilt with `Arrow Up` and `Arrow Down`, and floor height with `W` and `S`.
+4. Make two fists to lock calibration and start the round.
+5. Close either hand to grab the ball, then open it to throw.
+6. Press `Space` to force a throw for debugging or fallback testing.
+
+Press `D` to toggle the debug panel.
+
+## Deployment
+
+The app is ready for Vercel as a standard Vite project.
+
+- Framework preset: `Vite`
+- Install command: `npm install`
+- Build command: `npm run build`
+- Output directory: `dist`
+- Node version: `20.x` or newer
+- Environment variables: none required for the current implementation
+
+The included [`vercel.json`](./vercel.json) handles SPA routing and adds a few basic security headers.
+
+## GitHub / CI
+
+The included GitHub Actions workflow runs on pushes and pull requests:
+
+- `npm ci`
+- `npm run lint`
+- `npm run build`
+
+That gives you a baseline CI gate before connecting GitHub to Vercel for automatic preview and production deploys.
+
+## Deployment Checklist
+
+- Confirm camera permissions work in the target browser.
+- Run `npm run check` locally.
+- Verify calibration overlay hides after double-fist lock.
+- Verify grabbing and throwing works with both hands.
+- Verify score advances and the next round resets correctly.
+- Confirm the Vercel project uses the repository root and outputs `dist/`.
+- Confirm GitHub Actions passes on the branch being deployed.
+- Test the production URL on desktop and mobile-width browser layouts.
+
+## Notes
+
+- MediaPipe model assets load from jsDelivr at runtime.
+- The current experience is optimized for desktop/laptop webcams.
+- A fully headless environment cannot validate real camera tracking, so browser-based manual verification is still part of the release process.

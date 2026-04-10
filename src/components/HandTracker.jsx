@@ -1,236 +1,267 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { Hands, HAND_CONNECTIONS } from '@mediapipe/hands';
-import { Pose, POSE_CONNECTIONS } from '@mediapipe/pose';
-import { Camera } from '@mediapipe/camera_utils';
-import useGameStore from '../store/gameStore';
+import { useEffect, useRef } from 'react';
+import { Hands } from '@mediapipe/hands';
+import { Pose } from '@mediapipe/pose';
+import useGameStore, { BASE_LANE_SCALE, ballSizeFromLaneScale } from '../store/gameStore';
+import { buildThrowProfile } from '../lib/bowlingPhysics';
+
+const defaultHandData = {
+  present: false,
+  position: { x: 0, y: 0 },
+  landmarks: [],
+  speed: 0,
+  gesture: 'OPEN',
+  roll: 0,
+};
+
+const distance2D = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 
 const HandTracker = () => {
   const videoRef = useRef(null);
-  
-  // Store actions
   const updateHands = useGameStore((state) => state.updateHands);
   const updatePose = useGameStore((state) => state.updatePose);
   const updateSettings = useGameStore((state) => state.updateSettings);
   const throwBall = useGameStore((state) => state.throwBall);
-  const ballState = useGameStore((state) => state.ballState);
-  const gameStatus = useGameStore((state) => state.gameStatus);
-  const lockCalibration = useGameStore((state) => state.lockCalibration);
-  const gameSettings = useGameStore((state) => state.gameSettings);
+  const completeCalibration = useGameStore((state) => state.completeCalibration);
   const setBallState = useGameStore((state) => state.setBallState);
-  const activeHand = useGameStore((state) => state.activeHand);
   const setActiveHand = useGameStore((state) => state.setActiveHand);
+  const setTrackingStatus = useGameStore((state) => state.setTrackingStatus);
+  const setTrackingError = useGameStore((state) => state.setTrackingError);
 
-  // Local state for velocity calculation
-  const historyRefRight = useRef([]); 
+  const historyRefRight = useRef([]);
   const historyRefLeft = useRef([]);
   const lastGestureRefRight = useRef('OPEN');
   const lastGestureRefLeft = useRef('OPEN');
-  
-  const MAX_HISTORY = 8;
-  const FLING_THRESHOLD = 0.1; // DRASTICALLY REDUCED (Was 0.5)
+  const releaseArmedRefRight = useRef(false);
+  const releaseArmedRefLeft = useRef(false);
+  const releaseArmedAtRefRight = useRef(0);
+  const releaseArmedAtRefLeft = useRef(0);
+  const armedThrowRefRight = useRef(null);
+  const armedThrowRefLeft = useRef(null);
+  const executeThrowRef = useRef(() => {});
+  const handResultsRef = useRef(() => {});
+  const poseResultsRef = useRef(() => {});
+  const maxHistory = 8;
 
-  // Peak Velocity Finder (Moved Up for Scope Access)
-  const getPeakVelocity = (history) => {
-      let maxSpeed = 0;
-      let bestVel = { x: 0, y: 0, z: 0, roll: 0 };
-      
-      // Scan backwards through history
-      for (let i = history.length - 1; i > 0; i--) {
-          const curr = history[i];
-          const prev = history[i-1];
-          const dt = (curr.time - prev.time) / 1000;
-          
-          if (dt > 0 && dt < 0.1) { // Ignore large time gaps
-              const vx = (curr.x - prev.x) / dt;
-              const vy = (curr.y - prev.y) / dt;
-              const vz = (curr.z - prev.z) / dt; // Added Z velocity
-              const speed = Math.sqrt(vx*vx + vy*vy + vz*vz);
-              
-              if (speed > maxSpeed) {
-                  maxSpeed = speed;
-                  
-                  // Calculate roll at this peak moment
-                  const newIndex = curr.landmarks[5];
-                  const newPinky = curr.landmarks[17];
-                  const roll = Math.atan2(newPinky.y - newIndex.y, newPinky.x - newIndex.x);
-                  
-                  bestVel = { x: vx, y: vy, z: vz, roll };
-              }
-          }
-      }
-      return { speed: maxSpeed, ...bestVel };
-  };
+  const getReleaseMetrics = (history) => {
+    let maxSpeed = 0;
+    let peakVelocity = { x: 0, y: 0, z: 0 };
+    let weighted = { x: 0, y: 0, z: 0 };
+    let totalWeight = 0;
 
-  // SHARED PHYSICS CALCULATION
-  const calculateThrowVector = (handPos, peakVelocity) => {
-      // 1. Position: Hand X [0..1] -> World X (approx)
-      // Note: handPos.x is normalized [0,1].
-      // In onHandResults, we did: (rightHandData.position.x * 2 - 1) * -1 * 2
-      const handX = (handPos.x * 2 - 1) * -1 * 2; 
-      
-      // 2. Aim: Strong correction towards center
-      const aimX = -handX * 2.0; 
+    for (let i = history.length - 1; i > 0; i -= 1) {
+      const current = history[i];
+      const previous = history[i - 1];
+      const dt = (current.time - previous.time) / 1000;
 
-      // 3. Forward Force
-      // Based on Up (Y) and Forward (Z) speed
-      const handSpeedForward = Math.abs(peakVelocity.y) * 25 + Math.abs(peakVelocity.z) * 25;
-      
-      // Clamp force for consistency
-      const forwardForce = Math.min(70, Math.max(35, handSpeedForward));
+      if (dt > 0 && dt < 0.1) {
+        const vx = (current.x - previous.x) / dt;
+        const vy = (current.y - previous.y) / dt;
+        const vz = (current.z - previous.z) / dt;
+        const speed = Math.sqrt(vx * vx + vy * vy + vz * vz);
+        const weight = history.length - i + 1;
 
-      // 4. Side Force (Steering)
-      const velocitySteer = -peakVelocity.x * 5;
-      const aimSteer = aimX * 2; 
-      const sideForce = velocitySteer + aimSteer;
+        weighted.x += vx * weight;
+        weighted.y += vy * weight;
+        weighted.z += vz * weight;
+        totalWeight += weight;
 
-      // 5. Up Force & Spin
-      const upForce = 2; 
-      
-      // ADVANCED SPIN CALCULATION (User Request)
-      // "add spin to the ball"
-      // X-Axis Spin (Topspin/Backspin): Controlled by Wrist Flick (Velocity Y)
-      // Y-Axis Spin (Curve/Hook): Controlled by Side Motion (Velocity X)
-      // Z-Axis Spin (Spiral): Controlled by Hand Roll (peakVelocity.roll)
-      
-      const spinX = -peakVelocity.y * 5; // Topspin
-      const spinY = -peakVelocity.x * 8; // Side Spin (Curve) - Stronger
-      const spinZ = (peakVelocity.roll || 0) * 10; // Spiral
-      
-      const spin = [spinX, spinY, spinZ];
-
-      return { vector: [sideForce, upForce, -forwardForce], spin };
-  };
-
-  // Shared Throw Execution
-  const triggerThrow = (hand, velocity) => {
-      // ADDITIVE FORCE LOGIC (User Request)
-      // "Do exactly what the space bar does (Base Speed) but change the math according to the speed"
-      
-      const BASE_SPEED = 1.5; // The "Perfect" Spacebar Speed
-      
-      const effectiveVelocity = {
-          x: velocity.x, // Steering is purely hand-based
-          // Add Hand Speed to Base Speed
-          // If static: 0 + 1.5 = 1.5 (Spacebar behavior)
-          // If moving: velocity + 1.5 = Boosted Throw
-          y: Math.abs(velocity.y) + BASE_SPEED, 
-          z: Math.abs(velocity.z) // Forward Z adds to the "forwardForce" calculation in calculateThrowVector
-      };
-
-      const { vector, spin } = calculateThrowVector(hand.position, effectiveVelocity);
-      
-      console.log("EXECUTING THROW (Additive):", { original: velocity, effective: effectiveVelocity, vector });
-      
-      throwBall(vector, spin);
-      setActiveHand(null);
-  };
-
-  // MAIN THROW FUNCTION
-  // Called by both Spacebar (manual) and Hand Release (automatic)
-  const executeThrow = () => {
-      const state = useGameStore.getState();
-      
-      // Strict Check: Game must be playing and ball held
-      if (state.gameStatus !== 'PLAYING' || state.ballState !== 'HELD') {
-          console.warn("Throw attempt blocked: Game not playing or ball not held");
-          return;
-      }
-      
-      console.log("EXECUTE THROW TRIGGERED");
-      
-      const activeHand = state.activeHand;
-      let velocity = { x: 0, y: 0, z: 0 };
-
-      // Retrieve actual hand velocity from refs if available
-      if (activeHand === 'right' && historyRefRight.current.length > 0) {
-          const peak = getPeakVelocity(historyRefRight.current);
-          velocity = peak;
-      } else if (activeHand === 'left' && historyRefLeft.current.length > 0) {
-          const peak = getPeakVelocity(historyRefLeft.current);
-          velocity = peak;
-      }
-
-      // Determine which hand object to use
-      let hand = { position: { x: 0.5, y: 0.5 } };
-      if (activeHand === 'right' && state.rightHand.present) hand = state.rightHand;
-      else if (activeHand === 'left' && state.leftHand.present) hand = state.leftHand;
-      
-      // Execute Throw with Speed Logic
-      triggerThrow(hand, velocity);
-  };
-
-  useEffect(() => {
-    const handleKeyDown = (e) => {
-        if (e.code === 'Space') {
-            executeThrow();
+        if (speed > maxSpeed) {
+          maxSpeed = speed;
+          peakVelocity = { x: vx, y: vy, z: vz };
         }
+      }
+    }
+
+    const latest = history.at(-1);
+    const indexKnuckle = latest?.landmarks?.[5];
+    const pinkyKnuckle = latest?.landmarks?.[17];
+    const roll =
+      indexKnuckle && pinkyKnuckle
+        ? Math.atan2(pinkyKnuckle.y - indexKnuckle.y, pinkyKnuckle.x - indexKnuckle.x)
+        : 0;
+
+    const averagedVelocity =
+      totalWeight > 0
+        ? {
+            x: weighted.x / totalWeight,
+            y: weighted.y / totalWeight,
+            z: weighted.z / totalWeight,
+          }
+        : peakVelocity;
+
+    return {
+      speed: maxSpeed,
+      roll,
+      averagedVelocity,
+      peakVelocity,
     };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
+  };
+
+  const triggerThrow = (hand, release) => {
+    const ballSize = useGameStore.getState().gameSettings.ballSize;
+    const { vector, spin, launchPosition } = buildThrowProfile(hand.position, release, ballSize);
+    throwBall(vector, spin, launchPosition);
+    setActiveHand(null);
+    releaseArmedRefRight.current = false;
+    releaseArmedRefLeft.current = false;
+    armedThrowRefRight.current = null;
+    armedThrowRefLeft.current = null;
+  };
+
+  const executeThrow = () => {
+    const state = useGameStore.getState();
+
+    if (state.gameStatus !== 'PLAYING' || state.ballState !== 'HELD') {
+      return;
+    }
+
+    const activeHand = state.activeHand;
+    let release = {
+      speed: 0,
+      roll: 0,
+      averagedVelocity: { x: 0, y: 0, z: 0 },
+      peakVelocity: { x: 0, y: 0, z: 0 },
+    };
+
+    if (activeHand === 'right' && historyRefRight.current.length > 0) {
+      release = armedThrowRefRight.current?.release || getReleaseMetrics(historyRefRight.current);
+    } else if (activeHand === 'left' && historyRefLeft.current.length > 0) {
+      release = armedThrowRefLeft.current?.release || getReleaseMetrics(historyRefLeft.current);
+    }
+
+    let hand = { position: { x: 0.5, y: 0.5 } };
+    if (activeHand === 'right' && state.rightHand.present) {
+      hand = {
+        ...state.rightHand,
+        position: armedThrowRefRight.current?.position || state.rightHand.position,
+      };
+    } else if (activeHand === 'left' && state.leftHand.present) {
+      hand = {
+        ...state.leftHand,
+        position: armedThrowRefLeft.current?.position || state.leftHand.position,
+      };
+    }
+
+    triggerThrow(hand, release);
+  };
 
   useEffect(() => {
     let active = true;
+    let frameId = 0;
+    let processing = false;
+    let stream;
 
-    // 1. Hands Setup
     const hands = new Hands({
       locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`,
     });
 
     hands.setOptions({
-      maxNumHands: 2, // Track both hands
+      maxNumHands: 2,
       modelComplexity: 1,
       minDetectionConfidence: 0.5,
       minTrackingConfidence: 0.5,
     });
 
     hands.onResults((results) => {
-        if (!active) return;
-        onHandResults(results);
+      if (active) {
+        handResultsRef.current(results);
+      }
     });
 
-    // 2. Pose Setup
     const pose = new Pose({
-        locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`,
-    });
-    
-    pose.setOptions({
-        modelComplexity: 1,
-        smoothLandmarks: true,
-        minDetectionConfidence: 0.5,
-        minTrackingConfidence: 0.5
-    });
-    
-    pose.onResults((results) => {
-        if (!active) return;
-        onPoseResults(results);
+      locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`,
     });
 
-    // 3. Camera Setup
-    let camera = null;
-    if (videoRef.current) {
-      camera = new Camera(videoRef.current, {
-        onFrame: async () => {
-          if (videoRef.current && active) {
+    pose.setOptions({
+      modelComplexity: 1,
+      smoothLandmarks: true,
+      minDetectionConfidence: 0.5,
+      minTrackingConfidence: 0.5,
+    });
+
+    pose.onResults((results) => {
+      if (active) {
+        poseResultsRef.current(results);
+      }
+    });
+
+    const startTracking = async () => {
+      if (!navigator.mediaDevices?.getUserMedia || !videoRef.current) {
+        setTrackingStatus('error');
+        setTrackingError('Camera access is not available in this browser.');
+        return;
+      }
+
+      try {
+        setTrackingStatus('requesting_camera');
+        setTrackingError('');
+
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            facingMode: 'user',
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
+          },
+          audio: false,
+        });
+
+        videoRef.current.srcObject = stream;
+        await videoRef.current.play();
+        setTrackingStatus('camera_ready');
+
+        const processFrame = async () => {
+          if (!active || !videoRef.current) {
+            return;
+          }
+
+          if (processing || videoRef.current.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+            frameId = window.requestAnimationFrame(processFrame);
+            return;
+          }
+
+          processing = true;
+
+          try {
             await hands.send({ image: videoRef.current });
             await pose.send({ image: videoRef.current });
+            setTrackingStatus('ready');
+          } catch (error) {
+            setTrackingStatus('error');
+            setTrackingError(error.message || 'Tracking stopped unexpectedly.');
+            return;
+          } finally {
+            processing = false;
           }
-        },
-        width: 640,
-        height: 480,
-      });
-      camera.start();
-    }
+
+          frameId = window.requestAnimationFrame(processFrame);
+        };
+
+        frameId = window.requestAnimationFrame(processFrame);
+      } catch (error) {
+        setTrackingStatus('error');
+        setTrackingError(
+          error.name === 'NotAllowedError'
+            ? 'Camera permission was denied. Allow access and refresh to play.'
+            : error.message || 'Unable to start the camera feed.',
+        );
+      }
+    };
+
+    startTracking();
 
     return () => {
-        active = false;
-        hands.close();
-        pose.close();
-        if (camera) camera.stop();
+      active = false;
+      if (frameId) {
+        window.cancelAnimationFrame(frameId);
+      }
+      if (stream) {
+        stream.getTracks().forEach((track) => track.stop());
+      }
+      hands.close();
+      pose.close();
     };
-  }, []);
+  }, [setTrackingError, setTrackingStatus]);
 
-  // Gesture Detection Helper
   const detectGesture = (landmarks) => {
     const wrist = landmarks[0];
     const indexTip = landmarks[8];
@@ -238,270 +269,406 @@ const HandTracker = () => {
     const ringTip = landmarks[16];
     const pinkyTip = landmarks[20];
 
-    const dist = (p1, p2) => Math.sqrt(Math.pow(p1.x - p2.x, 2) + Math.pow(p1.y - p2.y, 2));
-    const mcp = landmarks[9] || landmarks[5];
-    const handSize = dist(wrist, mcp) || 0.1;
+    const dist = (p1, p2) => Math.sqrt((p1.x - p2.x) ** 2 + (p1.y - p2.y) ** 2);
+    const handSize = dist(wrist, landmarks[9] || landmarks[5]) || 0.1;
 
     const dIndex = dist(wrist, indexTip) / handSize;
     const dMiddle = dist(wrist, middleTip) / handSize;
     const dRing = dist(wrist, ringTip) / handSize;
     const dPinky = dist(wrist, pinkyTip) / handSize;
 
-    // LOWERED THRESHOLD: Make "OPEN" easier to detect
-    const openThreshold = 1.0; // Was 1.2
-    
     let openCount = 0;
-    if (dIndex > openThreshold) openCount++;
-    if (dMiddle > openThreshold) openCount++;
-    if (dRing > openThreshold) openCount++;
-    if (dPinky > openThreshold) openCount++;
-
-    // DEBUG GESTURE
-    // console.log("GESTURE DEBUG:", { openCount, dIndex, dMiddle, dRing, dPinky });
-
+    if (dIndex > 1) openCount += 1;
+    if (dMiddle > 1) openCount += 1;
+    if (dRing > 1) openCount += 1;
+    if (dPinky > 1) openCount += 1;
     if (openCount >= 3) return 'OPEN';
-    
-    // Check for FIST (Strictly Closed)
-    // If fingers are curled in (distance is small)
-    const closedThreshold = 0.9;
+
     let closedCount = 0;
-    if (dIndex < closedThreshold) closedCount++;
-    if (dMiddle < closedThreshold) closedCount++;
-    if (dRing < closedThreshold) closedCount++;
-    if (dPinky < closedThreshold) closedCount++;
-    
+    if (dIndex < 0.9) closedCount += 1;
+    if (dMiddle < 0.9) closedCount += 1;
+    if (dRing < 0.9) closedCount += 1;
+    if (dPinky < 0.9) closedCount += 1;
     if (closedCount >= 3) return 'FIST';
-    
-    return 'UNKNOWN'; // New state for "In Between"
+
+    return 'UNKNOWN';
   };
 
   const onPoseResults = (results) => {
-      if (!results.poseLandmarks) return;
-      
-      const landmarks = results.poseLandmarks;
-      // 12: Right Shoulder, 14: Right Elbow
-      // 11: Left Shoulder, 13: Left Elbow
-      // Note: MediaPipe Pose "Right" is actually the person's right side.
-      // If mirrored video, it appears on the left.
-      
+    if (!results.poseLandmarks) {
       updatePose({
-          rightShoulder: landmarks[12],
-          rightElbow: landmarks[14],
-          leftShoulder: landmarks[11],
-          leftElbow: landmarks[13]
+        rightShoulder: null,
+        rightElbow: null,
+        leftShoulder: null,
+        leftElbow: null,
       });
+      return;
+    }
+
+    const landmarks = results.poseLandmarks;
+    updatePose({
+      rightShoulder: landmarks[12],
+      rightElbow: landmarks[14],
+      leftShoulder: landmarks[11],
+      leftElbow: landmarks[13],
+    });
   };
 
-  // Velocity Helper
   const calculateHandPhysics = (wrist, landmarks, historyRef) => {
-      const now = Date.now();
-      const history = historyRef.current;
-      history.push({ x: wrist.x, y: wrist.y, z: wrist.z || 0, landmarks, time: now }); // Added Z
-      if (history.length > MAX_HISTORY) history.shift();
-      
-      // Calculate instantaneous speed for display/debug
-      let speed = 0;
-      if (history.length > 2) {
-          const newest = history[history.length - 1];
-          const previous = history[history.length - 2];
-          const dt = (newest.time - previous.time) / 1000;
-          if (dt > 0) {
-              const dx = newest.x - previous.x;
-              const dy = newest.y - previous.y;
-              // Z is usually comparable in scale to X/Y in normalized landmarks?
-              // MediaPipe Z is roughly same scale as X.
-              const dz = newest.z - previous.z;
-              speed = Math.sqrt(dx*dx + dy*dy + dz*dz) / dt;
-          }
+    const now = Date.now();
+    const history = historyRef.current;
+    history.push({ x: wrist.x, y: wrist.y, z: wrist.z || 0, landmarks, time: now });
+    if (history.length > maxHistory) history.shift();
+
+    let speed = 0;
+    if (history.length > 1) {
+      const newest = history[history.length - 1];
+      const previous = history[history.length - 2];
+      const dt = (newest.time - previous.time) / 1000;
+
+      if (dt > 0) {
+        const dx = newest.x - previous.x;
+        const dy = newest.y - previous.y;
+        const dz = newest.z - previous.z;
+        speed = Math.sqrt(dx * dx + dy * dy + dz * dz) / dt;
       }
-      return { speed };
+    }
+
+    return { speed };
   };
 
-  // Distance Tracker for Throwing
-  const throwStartPosRight = useRef(null);
-  const throwStartPosLeft = useRef(null);
+  const shouldArmRelease = (handData, release) => {
+    const downwardSwing = release.averagedVelocity.y > 0.28 || release.peakVelocity.y > 0.48;
+    const movingWithIntent = release.speed > 0.8;
+    const releaseZone = handData.position.y > 0.34;
+    return movingWithIntent && downwardSwing && releaseZone;
+  };
+
+  const shouldReleaseBall = (gesture, wasGrabbing, armedRef, armedAtRef, handData, release) => {
+    const now = Date.now();
+    const openRelease = gesture === 'OPEN' || (gesture === 'UNKNOWN' && wasGrabbing);
+    const withinWindow = now - armedAtRef.current < 950;
+    const strongFollowThrough =
+      release.speed > 1.45 &&
+      (release.peakVelocity.y > 0.62 || release.averagedVelocity.y > 0.34) &&
+      handData.position.y > 0.42;
+
+    if (armedRef.current && withinWindow) {
+      const hasFollowThrough =
+        release.speed > 0.55 ||
+        release.peakVelocity.y > 0.35 ||
+        release.averagedVelocity.y > 0.18 ||
+        handData.position.y > 0.38;
+
+      if (openRelease && hasFollowThrough) {
+        armedRef.current = false;
+        return true;
+      }
+
+      if (gesture !== 'FIST' && strongFollowThrough) {
+        armedRef.current = false;
+        return true;
+      }
+    }
+
+    if (gesture === 'OPEN' && !wasGrabbing) {
+      armedRef.current = false;
+    }
+
+    return false;
+  };
+
+  const assignHandsToSides = (detections, pose) => {
+    if (detections.length === 0) {
+      return { right: null, left: null };
+    }
+
+    const hasShoulders = pose.rightShoulder && pose.leftShoulder;
+
+    if (detections.length === 1) {
+      const [detection] = detections;
+
+      if (hasShoulders) {
+        const rightDistance = distance2D(detection.wrist, pose.rightShoulder);
+        const leftDistance = distance2D(detection.wrist, pose.leftShoulder);
+        return rightDistance <= leftDistance
+          ? { right: detection, left: null }
+          : { right: null, left: detection };
+      }
+
+      return detection.sourceLabel === 'Right'
+        ? { right: detection, left: null }
+        : { right: null, left: detection };
+    }
+
+    if (hasShoulders) {
+      const [first, second] = detections;
+      const firstRight = distance2D(first.wrist, pose.rightShoulder);
+      const firstLeft = distance2D(first.wrist, pose.leftShoulder);
+      const secondRight = distance2D(second.wrist, pose.rightShoulder);
+      const secondLeft = distance2D(second.wrist, pose.leftShoulder);
+
+      const directCost = firstRight + secondLeft;
+      const swappedCost = firstLeft + secondRight;
+
+      return directCost <= swappedCost
+        ? { right: first, left: second }
+        : { right: second, left: first };
+    }
+
+    const sorted = [...detections].sort((a, b) => a.wrist.x - b.wrist.x);
+    return {
+      right: sorted[0] || null,
+      left: sorted[1] || null,
+    };
+  };
+
+  const updateTrackedHand = ({
+    side,
+    handData,
+    nextActiveHand,
+    nextBallState,
+    setNextActiveHand,
+    setNextBallState,
+    lastGestureRef,
+    releaseArmedRef,
+    releaseArmedAtRef,
+    historyRef,
+  }) => {
+    if (!handData.present) {
+      lastGestureRef.current = 'OPEN';
+      releaseArmedRef.current = false;
+      if (side === 'right') armedThrowRefRight.current = null;
+      if (side === 'left') armedThrowRefLeft.current = null;
+      return;
+    }
+
+    if (useGameStore.getState().gameStatus !== 'PLAYING') {
+      lastGestureRef.current = handData.gesture;
+      return;
+    }
+
+    const isGrabbing = handData.gesture === 'FIST' || handData.gesture === 'UNKNOWN';
+    const wasGrabbing =
+      lastGestureRef.current === 'FIST' || lastGestureRef.current === 'UNKNOWN';
+
+    if (nextBallState === 'LOCKED' && isGrabbing && !nextActiveHand) {
+      setNextActiveHand(side);
+      setNextBallState('HELD');
+      setActiveHand(side);
+      setBallState('HELD');
+      releaseArmedRef.current = false;
+      if (side === 'right') armedThrowRefRight.current = null;
+      if (side === 'left') armedThrowRefLeft.current = null;
+    } else if (isGrabbing && !wasGrabbing && (!nextActiveHand || nextActiveHand === side)) {
+      setNextActiveHand(side);
+      setNextBallState('HELD');
+      setActiveHand(side);
+      setBallState('HELD');
+      releaseArmedRef.current = false;
+      if (side === 'right') armedThrowRefRight.current = null;
+      if (side === 'left') armedThrowRefLeft.current = null;
+    }
+
+    if (useGameStore.getState().activeHand === side || nextActiveHand === side) {
+      const release = getReleaseMetrics(historyRef.current);
+
+      if ((useGameStore.getState().ballState === 'HELD' || nextBallState === 'HELD') && isGrabbing) {
+        if (shouldArmRelease(handData, release)) {
+          if (!releaseArmedRef.current) {
+            releaseArmedRef.current = true;
+            releaseArmedAtRef.current = Date.now();
+            const snapshot = {
+              position: { ...handData.position },
+              release: {
+                speed: release.speed,
+                roll: release.roll,
+                averagedVelocity: { ...release.averagedVelocity },
+                peakVelocity: { ...release.peakVelocity },
+              },
+            };
+
+            if (side === 'right') armedThrowRefRight.current = snapshot;
+            if (side === 'left') armedThrowRefLeft.current = snapshot;
+          }
+        } else if (
+          releaseArmedRef.current &&
+          Date.now() - releaseArmedAtRef.current > 1100 &&
+          isGrabbing
+        ) {
+          releaseArmedRef.current = false;
+          if (side === 'right') armedThrowRefRight.current = null;
+          if (side === 'left') armedThrowRefLeft.current = null;
+        }
+      }
+
+      if (
+        (useGameStore.getState().ballState === 'HELD' || nextBallState === 'HELD') &&
+        shouldReleaseBall(
+          handData.gesture,
+          wasGrabbing,
+          releaseArmedRef,
+          releaseArmedAtRef,
+          handData,
+          release,
+        )
+      ) {
+        executeThrow();
+      }
+    }
+
+    lastGestureRef.current = handData.gesture;
+  };
 
   const onHandResults = (results) => {
-    // FIX: Get fresh state directly from store to avoid stale closures in callback
     const currentState = useGameStore.getState();
-    const { activeHand, ballState, gameStatus } = currentState;
+    const { activeHand, ballState, gameStatus, pose } = currentState;
+    let nextActiveHand = activeHand;
+    let nextBallState = ballState;
 
-    let rightHandData = { present: false, position: {x:0,y:0}, landmarks: [], speed: 0, gesture: 'OPEN', roll: 0 };
-    let leftHandData = { present: false, position: {x:0,y:0}, landmarks: [], speed: 0, gesture: 'OPEN', roll: 0 };
+    let rightHandData = defaultHandData;
+    let leftHandData = defaultHandData;
+    const detections = [];
 
     if (results.multiHandLandmarks && results.multiHandedness) {
-        results.multiHandedness.forEach((handedness, index) => {
-            const landmarks = results.multiHandLandmarks[index];
-            const label = handedness.label; // "Left" or "Right"
-            const wrist = landmarks[0];
-            const gesture = detectGesture(landmarks);
-            
-            if (label === 'Right') {
-                // Physics
-                const { speed } = calculateHandPhysics(wrist, landmarks, historyRefRight);
-                
-                rightHandData = {
-                    present: true,
-                    position: { x: wrist.x, y: wrist.y },
-                    landmarks,
-                    speed,
-                    gesture,
-                    roll: 0 // Will be calc'd on throw
-                };
-                
-                // Unlock logic (Transition from Locked -> Held)
-                if (gameStatus === 'PLAYING' && ballState === 'LOCKED') {
-                     if (gesture === 'OPEN') {
-                         setBallState('HELD');
-                     }
-                }
+      results.multiHandedness.forEach((handedness, index) => {
+        const landmarks = results.multiHandLandmarks[index];
+        const label = handedness.label;
+        const wrist = landmarks[0];
+        const gesture = detectGesture(landmarks);
 
-                // Interaction Logic (Throw/Catch)
-                if (gameStatus === 'PLAYING') {
-                    // CATCH / TRANSFER (Right Hand)
-                    // Allow FIST or UNKNOWN to grab (permissive grabbing)
-                    const isGrabbing = gesture === 'FIST' || gesture === 'UNKNOWN';
-                    // We need to track if we WERE grabbing to detect release
-                    const wasGrabbing = lastGestureRefRight.current === 'FIST' || lastGestureRefRight.current === 'UNKNOWN';
-                    
-                    // If we just grabbed, and the ball is NOT in our hand...
-                    if (isGrabbing && !wasGrabbing) {
-                        if (activeHand !== 'right') {
-                            console.log("RIGHT HAND GRABBED BALL (TRANSFER)");
-                            setActiveHand('right');
-                            setBallState('HELD');
-                        }
-                    }
-
-                    // THROW LOGIC (Right Hand)
-                    if (activeHand === 'right' && ballState === 'HELD') {
-                         const peak = getPeakVelocity(historyRefRight.current);
-                         
-                         // STATE-BASED RELEASE (User Request):
-                         // "Look the hand is open but it is not thrown"
-                         // This happens because the "Transition" (wasGrabbing) check fails if we missed the frame where it was closed.
-                         // Or if the user starts with an open hand and the ball snaps to it.
-                         
-                         // NEW LOGIC: If hand is explicitly OPEN, just throw it.
-                         // We don't care if it was closed before. 
-                         // The user has to close their hand to grab it (handled above in CATCH).
-                         // Once they have it (HELD), any OPEN state means "Let go".
-                         
-                         if (gesture === 'OPEN') {
-                              console.log("RELEASE TRIGGERED (Right) - HAND IS OPEN", { gesture, peak });
-                              executeThrow();
-                              throwStartPosRight.current = null;
-                         }
-                         
-                         // Keep Fling support for safety
-                         else if (peak.speed > 2.0) {
-                              console.log("RELEASE TRIGGERED (Right) - FLING", { speed: peak.speed });
-                              executeThrow();
-                              throwStartPosRight.current = null;
-                         }
-                    }
-                }
-                
-                lastGestureRefRight.current = gesture;
-
-            } else if (label === 'Left') {
-                // Physics
-                const { speed } = calculateHandPhysics(wrist, landmarks, historyRefLeft);
-                
-                leftHandData = {
-                    present: true,
-                    position: { x: wrist.x, y: wrist.y },
-                    landmarks,
-                    speed,
-                    gesture,
-                    roll: 0
-                };
-                
-                if (gameStatus === 'PLAYING') {
-                     // CATCH / TRANSFER (Left Hand)
-                     const isGrabbing = gesture === 'FIST' || gesture === 'UNKNOWN';
-                     const wasGrabbing = lastGestureRefLeft.current === 'FIST' || lastGestureRefLeft.current === 'UNKNOWN';
-                     
-                     if (isGrabbing && !wasGrabbing) {
-                         if (activeHand !== 'left') {
-                             console.log("LEFT HAND GRABBED BALL (TRANSFER)");
-                             setActiveHand('left');
-                             setBallState('HELD');
-                         }
-                     }
-
-                     // THROW LOGIC (Left Hand)
-                     if (activeHand === 'left' && ballState === 'HELD') {
-                         const peak = getPeakVelocity(historyRefLeft.current);
-                         
-                         if (gesture === 'OPEN') {
-                              console.log("RELEASE TRIGGERED (Left) - HAND IS OPEN", { gesture });
-                              executeThrow();
-                              throwStartPosLeft.current = null;
-                         }
-                         else if (peak.speed > 2.0) {
-                              executeThrow();
-                              throwStartPosLeft.current = null;
-                         }
-                     }
-                }
-                
-                // Calibration Logic (Resize) - STRICT CHECK
-                // Only allow resizing if we are explicitly in CALIBRATION mode AND not locked
-                const pinScaleLocked = useGameStore.getState().pinScaleLocked;
-                if (gameStatus === 'CALIBRATION' && gesture === 'FIST' && !pinScaleLocked) {
-                    const y = Math.max(0, Math.min(1, wrist.y));
-                    const scale = 3.0 - (y * 2.5); 
-                    const ballSize = 0.3 * scale;
-                    updateSettings({ pinScale: scale, ballSize });
-                }
-                
-                lastGestureRefLeft.current = gesture;
-            }
+        detections.push({
+          sourceLabel: label,
+          wrist: { x: wrist.x, y: wrist.y },
+          handData: {
+            present: true,
+            position: { x: wrist.x, y: wrist.y },
+            landmarks,
+            speed: 0,
+            gesture,
+            roll: 0,
+          },
         });
-        
-        // Global Checks (e.g. Double Fist Lock)
-        
-        // 1. AUTO UNLOCK / INSTANT START
-        // If we somehow get stuck in LOCKED, force to HELD.
-        if (gameStatus === 'PLAYING' && ballState === 'LOCKED') {
-             console.log("AUTO UNLOCKING TO HELD");
-             setBallState('HELD');
-             if (!activeHand) setActiveHand('right');
-        }
+      });
 
-        // 2. LOCK CALIBRATION -> START GAME
-        if (gameStatus === 'CALIBRATION') {
-            if (rightHandData.gesture === 'FIST' && leftHandData.gesture === 'FIST') {
-                console.log("LOCKING CALIBRATION - DOUBLE FIST");
-                lockCalibration();
-                
-                // INSTANT GRAB:
-                // 1. Set Ball to HELD immediately (skip LOCKED)
-                // 2. Assign to RIGHT hand by default
-                setBallState('HELD');
-                setActiveHand('right');
-            }
-        }
+      const assignment = assignHandsToSides(detections, pose);
+
+      if (assignment.right) {
+        const { speed } = calculateHandPhysics(
+          assignment.right.handData.landmarks[0],
+          assignment.right.handData.landmarks,
+          historyRefRight,
+        );
+        const release = getReleaseMetrics(historyRefRight.current);
+        rightHandData = {
+          ...assignment.right.handData,
+          speed,
+          roll: release.roll,
+          release: armedThrowRefRight.current?.release || release,
+          releasePosition: armedThrowRefRight.current?.position || null,
+        };
+      }
+
+      if (assignment.left) {
+        const { speed } = calculateHandPhysics(
+          assignment.left.handData.landmarks[0],
+          assignment.left.handData.landmarks,
+          historyRefLeft,
+        );
+        const release = getReleaseMetrics(historyRefLeft.current);
+        leftHandData = {
+          ...assignment.left.handData,
+          speed,
+          roll: release.roll,
+          release: armedThrowRefLeft.current?.release || release,
+          releasePosition: armedThrowRefLeft.current?.position || null,
+        };
+      }
+
+      updateTrackedHand({
+        side: 'right',
+        handData: rightHandData,
+        nextActiveHand,
+        nextBallState,
+        setNextActiveHand: (value) => {
+          nextActiveHand = value;
+        },
+        setNextBallState: (value) => {
+          nextBallState = value;
+        },
+        lastGestureRef: lastGestureRefRight,
+        releaseArmedRef: releaseArmedRefRight,
+        releaseArmedAtRef: releaseArmedAtRefRight,
+        historyRef: historyRefRight,
+      });
+
+      updateTrackedHand({
+        side: 'left',
+        handData: leftHandData,
+        nextActiveHand,
+        nextBallState,
+        setNextActiveHand: (value) => {
+          nextActiveHand = value;
+        },
+        setNextBallState: (value) => {
+          nextBallState = value;
+        },
+        lastGestureRef: lastGestureRefLeft,
+        releaseArmedRef: releaseArmedRefLeft,
+        releaseArmedAtRef: releaseArmedAtRefLeft,
+        historyRef: historyRefLeft,
+      });
+
+      const pinScaleLocked = useGameStore.getState().pinScaleLocked;
+      if (gameStatus === 'CALIBRATION' && leftHandData.gesture === 'FIST' && !pinScaleLocked) {
+        const y = Math.max(0, Math.min(1, leftHandData.position.y));
+        const scale = Math.max(BASE_LANE_SCALE, 3 - y);
+        updateSettings({ pinScale: scale, ballSize: ballSizeFromLaneScale(scale) });
+      }
+
+      if (
+        gameStatus === 'CALIBRATION' &&
+        rightHandData.gesture === 'FIST' &&
+        leftHandData.gesture === 'FIST'
+      ) {
+        completeCalibration();
+      }
     }
-    
+
+    if (gameStatus !== 'PLAYING' || nextBallState !== 'HELD') {
+      releaseArmedRefRight.current = false;
+      releaseArmedRefLeft.current = false;
+      armedThrowRefRight.current = null;
+      armedThrowRefLeft.current = null;
+    }
+
     updateHands(rightHandData, leftHandData);
   };
 
+  executeThrowRef.current = executeThrow;
+  handResultsRef.current = onHandResults;
+  poseResultsRef.current = onPoseResults;
+
+  useEffect(() => {
+    const handleKeyDown = (event) => {
+      if (event.code === 'Space') {
+        executeThrowRef.current();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
   return (
-    <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', zIndex: -1, overflow: 'hidden' }}>
-      <video 
-        ref={videoRef} 
-        style={{ 
-            width: '100%', 
-            height: '100%', 
-            objectFit: 'cover',
-            transform: 'scaleX(-1)' // Mirroring
-        }} 
+    <div className="camera-layer">
+      <video
+        ref={videoRef}
+        className="camera-layer__video"
         playsInline
         muted
         autoPlay
-      ></video>
+      />
     </div>
   );
 };

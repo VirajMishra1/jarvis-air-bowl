@@ -1,13 +1,669 @@
+@import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700&family=Space+Grotesk:wght@400;500;700&display=swap');
+
+:root {
+  color-scheme: dark;
+  --bg-primary: #030712;
+  --bg-secondary: rgba(6, 16, 29, 0.74);
+  --panel-border: rgba(118, 240, 255, 0.22);
+  --panel-shadow: 0 20px 60px rgba(0, 0, 0, 0.4);
+  --text-primary: #f4fbff;
+  --text-muted: rgba(227, 241, 255, 0.7);
+  --accent-cyan: #25e7ff;
+  --accent-orange: #ff6b4a;
+  --accent-lime: #b8ff4f;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  width: 100%;
+  height: 100%;
+}
+
 body {
   margin: 0;
-  padding: 0;
-  background-color: #000;
   overflow: hidden;
-  font-family: 'Orbitron', sans-serif;
+  background:
+    radial-gradient(circle at top, rgba(37, 231, 255, 0.12), transparent 35%),
+    radial-gradient(circle at bottom, rgba(255, 107, 74, 0.16), transparent 38%),
+    linear-gradient(180deg, #050914 0%, #02040a 100%);
+  font-family: 'Space Grotesk', sans-serif;
+  color: var(--text-primary);
   user-select: none;
 }
 
-#root {
-  width: 100vw;
-  height: 100vh;
+button {
+  font: inherit;
+}
+
+.scene-shell,
+.scene-shell__canvas,
+.camera-layer,
+.camera-layer__video,
+.hud,
+.hand-overlay,
+.hud__arms,
+.calibration-overlay {
+  position: absolute;
+  inset: 0;
+}
+
+.scene-shell {
+  overflow: hidden;
+}
+
+.scene-shell__backdrop {
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(135deg, rgba(13, 29, 43, 0.4), transparent 55%),
+    radial-gradient(circle at 15% 20%, rgba(37, 231, 255, 0.1), transparent 25%),
+    radial-gradient(circle at 85% 85%, rgba(255, 107, 74, 0.12), transparent 30%);
+  pointer-events: none;
+  z-index: -1;
+}
+
+.camera-layer {
+  overflow: hidden;
+  z-index: -2;
+}
+
+.camera-layer__video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transform: scaleX(-1);
+  filter: saturate(1.05) contrast(1.02);
+}
+
+.hud,
+.calibration-overlay,
+.hand-overlay,
+.hud__arms {
+  pointer-events: none;
+}
+
+.hud {
+  z-index: 10;
+  background: radial-gradient(circle, transparent 58%, rgba(5, 11, 22, 0.45) 100%);
+}
+
+.hand-overlay,
+.hud__arms {
+  width: 100%;
+  height: 100%;
+}
+
+.hud__status-pill,
+.hud__scoreboard,
+.hud__debug,
+.calibration-card {
+  position: absolute;
+  backdrop-filter: blur(16px);
+  background: var(--bg-secondary);
+  border: 1px solid var(--panel-border);
+  box-shadow: var(--panel-shadow);
+}
+
+.hud__chip,
+.calibration-card__stats div {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.hud__label,
+.hud__eyebrow,
+.calibration-card__eyebrow,
+.calibration-card__controls span,
+.calibration-card__stats span {
+  color: var(--text-muted);
+  font-size: 0.74rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.calibration-card h2,
+.hud__score-total strong {
+  font-family: 'Orbitron', sans-serif;
+}
+
+.hud__scoreboard-header h1,
+.calibration-card h2 {
+  margin: 0;
+}
+
+.calibration-card__copy {
+  margin: 0;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+.hud__scoreboard {
+  top: 1.75rem;
+  left: 1.85rem;
+  right: 1.85rem;
+  bottom: auto;
+  transform: none;
+  padding: 0.48rem 0.62rem 0.52rem;
+  border-radius: 1.15rem;
+  background:
+    linear-gradient(180deg, rgba(7, 18, 31, 0.88), rgba(4, 10, 19, 0.78)),
+    radial-gradient(circle at top, rgba(255, 107, 74, 0.12), transparent 35%);
+  transition: transform 180ms ease, border-color 180ms ease, box-shadow 180ms ease;
+}
+
+.hud__scoreboard--pulse {
+  transform: scale(1.01);
+  border-color: rgba(255, 107, 74, 0.42);
+  box-shadow:
+    var(--panel-shadow),
+    0 0 30px rgba(255, 107, 74, 0.12);
+}
+
+.hud__scoreboard-header,
+.hud__scoreboard-actions,
+.hud__scoreboard-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.hud__scoreboard-header {
+  margin-bottom: 0.34rem;
+}
+
+.hud__scoreboard-subtitle {
+  margin: 0.08rem 0 0;
+  color: var(--text-muted);
+  font-size: 0.7rem;
+  line-height: 1.3;
+}
+
+.hud__score-total {
+  min-width: 5.2rem;
+  padding: 0.35rem 0.5rem;
+  border-radius: 0.85rem;
+  background: linear-gradient(135deg, rgba(255, 107, 74, 0.16), rgba(37, 231, 255, 0.12));
+  border: 1px solid rgba(255, 107, 74, 0.18);
+  text-align: right;
+}
+
+.hud__score-total strong {
+  display: block;
+  margin-top: 0.1rem;
+  font-size: clamp(1.2rem, 1.8vw, 1.7rem);
+  line-height: 1;
+  color: var(--accent-orange);
+}
+
+.hud__frames {
+  display: grid;
+  grid-template-columns: repeat(9, minmax(0, 1fr)) minmax(8rem, 1.4fr);
+  gap: 0.28rem;
+  margin: 0 0 0.34rem;
+}
+
+.hud__frame {
+  min-width: 0;
+  padding: 0.36rem 0.34rem 0.34rem;
+  border-radius: 0.85rem;
+  border: 1px solid rgba(118, 240, 255, 0.12);
+  background: rgba(6, 15, 26, 0.66);
+  display: grid;
+  gap: 0.22rem;
+}
+
+.hud__frame--current {
+  border-color: rgba(37, 231, 255, 0.38);
+  box-shadow: inset 0 0 0 1px rgba(37, 231, 255, 0.12), 0 0 22px rgba(37, 231, 255, 0.08);
+}
+
+.hud__frame--complete {
+  border-color: rgba(255, 107, 74, 0.2);
+}
+
+.hud__frame--tenth {
+  background: linear-gradient(180deg, rgba(13, 21, 37, 0.85), rgba(7, 13, 22, 0.82));
+}
+
+.hud__frame-number {
+  color: var(--text-muted);
+  font-size: 0.58rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.hud__frame-rolls {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.2rem;
+}
+
+.hud__frame-rolls--tenth {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.hud__frame-roll {
+  min-height: 1.2rem;
+  border-radius: 0.52rem;
+  display: grid;
+  place-items: center;
+  font-family: 'Orbitron', sans-serif;
+  font-size: 0.74rem;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(118, 240, 255, 0.08);
+}
+
+.hud__frame-total {
+  min-height: 1.08rem;
+  display: grid;
+  place-items: center;
+  border-radius: 0.52rem;
+  background: rgba(255, 255, 255, 0.02);
+  font-family: 'Orbitron', sans-serif;
+  font-size: 0.72rem;
+}
+
+.hud__scoreboard-meta {
+  color: var(--text-muted);
+  font-size: 0.68rem;
+  line-height: 1.3;
+}
+
+.hud__action {
+  pointer-events: auto;
+  border: 1px solid rgba(118, 240, 255, 0.22);
+  border-radius: 999px;
+  padding: 0.45rem 0.8rem;
+  background: linear-gradient(135deg, rgba(37, 231, 255, 0.18), rgba(255, 107, 74, 0.16));
+  color: var(--text-primary);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.hud__action:hover {
+  border-color: rgba(37, 231, 255, 0.38);
+}
+
+.hud__action:focus-visible {
+  outline: 2px solid rgba(37, 231, 255, 0.6);
+  outline-offset: 2px;
+}
+
+.hud__reticle {
+  position: absolute;
+  width: 3rem;
+  height: 3rem;
+  transform: translate(-50%, -50%);
+  border: 2px solid var(--reticle-color);
+  border-radius: 999px;
+  box-shadow: 0 0 18px var(--reticle-color);
+}
+
+.hud__reticle::after {
+  content: '';
+  position: absolute;
+  inset: 50%;
+  width: 0.35rem;
+  height: 0.35rem;
+  transform: translate(-50%, -50%);
+  border-radius: 999px;
+  background: var(--reticle-color);
+}
+
+.hud__debug {
+  top: 8.7rem;
+  right: 1.25rem;
+  padding: 0.9rem 1rem;
+  border-radius: 1rem;
+  min-width: 12rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
+.hud__debug-title {
+  margin-bottom: 0.35rem;
+  color: var(--accent-lime);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+}
+
+.hud__corners span {
+  position: absolute;
+  width: 4.25rem;
+  height: 4.25rem;
+  border: 2px solid rgba(255, 107, 74, 0.55);
+}
+
+.hud__corners span:nth-child(1) {
+  top: 1rem;
+  left: 1rem;
+  border-right: 0;
+  border-bottom: 0;
+}
+
+.hud__corners span:nth-child(2) {
+  top: 1rem;
+  right: 1rem;
+  border-left: 0;
+  border-bottom: 0;
+}
+
+.hud__corners span:nth-child(3) {
+  bottom: 1rem;
+  left: 1rem;
+  border-top: 0;
+  border-right: 0;
+}
+
+.hud__corners span:nth-child(4) {
+  right: 1rem;
+  bottom: 1rem;
+  border-top: 0;
+  border-left: 0;
+}
+
+.calibration-overlay {
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-start;
+  padding: 1.5rem;
+  z-index: 20;
+}
+
+.calibration-overlay__beam {
+  position: absolute;
+  left: 0;
+  width: 100%;
+  height: 0.65rem;
+  background: linear-gradient(180deg, rgba(37, 231, 255, 0.55), transparent);
+  box-shadow: 0 0 20px rgba(37, 231, 255, 0.5);
+  animation: scanBeam 3s ease-in-out infinite;
+  opacity: 0.45;
+}
+
+.calibration-panel {
+  width: min(23rem, calc(100vw - 3rem));
+  max-height: calc(100vh - 3rem);
+  overflow: auto;
+  padding: 0.88rem;
+  border-radius: 1.2rem;
+  pointer-events: auto;
+  backdrop-filter: blur(14px);
+  background: rgba(8, 16, 28, 0.66);
+  border: 1px solid rgba(118, 240, 255, 0.18);
+  box-shadow: var(--panel-shadow);
+}
+
+.calibration-panel--expanded {
+  width: min(27rem, calc(100vw - 3rem));
+}
+
+.calibration-panel__header,
+.calibration-card__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.calibration-panel__header h2 {
+  margin: 0.25rem 0 0;
+  font-family: 'Orbitron', sans-serif;
+  font-size: clamp(1.02rem, 2vw, 1.45rem);
+  line-height: 1.15;
+}
+
+.calibration-panel__header-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.5rem;
+}
+
+.calibration-toggle {
+  border: 1px solid rgba(118, 240, 255, 0.2);
+  border-radius: 999px;
+  padding: 0.45rem 0.8rem;
+  background: rgba(7, 18, 32, 0.75);
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.calibration-card__status {
+  padding: 0.5rem 0.8rem;
+  border-radius: 999px;
+  border: 1px solid rgba(118, 240, 255, 0.22);
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+
+.calibration-card__status--ready,
+.calibration-card__status--camera_ready {
+  border-color: rgba(184, 255, 79, 0.35);
+  color: var(--accent-lime);
+}
+
+.calibration-card__status--error {
+  border-color: rgba(255, 107, 74, 0.45);
+  color: var(--accent-orange);
+}
+
+.calibration-card__hero {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.7rem;
+  margin-top: 0.8rem;
+}
+
+.calibration-card__hero-copy,
+.calibration-card__summary {
+  padding: 0.75rem 0.85rem;
+  border: 1px solid rgba(118, 240, 255, 0.16);
+  border-radius: 1rem;
+  background: rgba(8, 18, 32, 0.5);
+}
+
+.calibration-card__hero-copy strong,
+.calibration-card__summary-label {
+  display: block;
+  margin-bottom: 0.35rem;
+  font-family: 'Orbitron', sans-serif;
+  font-size: 0.85rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.calibration-card__hero-copy span,
+.calibration-card__summary p {
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+.calibration-card__summary {
+  margin: 1rem 0;
+}
+
+.calibration-card__summary p {
+  margin: 0;
+}
+
+.calibration-panel__status-row {
+  display: grid;
+  gap: 0.48rem;
+  margin: 0.75rem 0;
+}
+
+.calibration-chip {
+  padding: 0.56rem 0.72rem;
+  border-radius: 0.9rem;
+  border: 1px solid rgba(118, 240, 255, 0.14);
+  background: rgba(8, 18, 32, 0.46);
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.calibration-chip--active {
+  border-color: rgba(37, 231, 255, 0.42);
+  color: var(--accent-cyan);
+}
+
+.calibration-chip--ready {
+  border-color: rgba(184, 255, 79, 0.34);
+  color: var(--accent-lime);
+}
+
+.calibration-card__stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.65rem;
+  margin: 0.8rem 0;
+}
+
+.calibration-card__stats--compact {
+  margin-top: 0.25rem;
+}
+
+.calibration-controls {
+  display: grid;
+  gap: 0.72rem;
+}
+
+.calibration-control {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.calibration-control span {
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.calibration-control input[type='range'] {
+  width: 100%;
+  accent-color: var(--accent-cyan);
+}
+
+.calibration-card__controls {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.55rem 0.85rem;
+  margin-top: 0.8rem;
+}
+
+.calibration-card__controls--compact {
+  font-size: 0.78rem;
+}
+
+.calibration-card__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.7rem;
+  margin-top: 0.8rem;
+}
+
+.calibration-card__actions--compact {
+  margin-top: 0.8rem;
+}
+
+.calibration-button {
+  border: 0;
+  border-radius: 999px;
+  padding: 0.74rem 1rem;
+  background: linear-gradient(135deg, var(--accent-cyan), #77fff1);
+  color: #041018;
+  font-family: 'Orbitron', sans-serif;
+  font-size: 0.82rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.calibration-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.calibration-button--secondary {
+  background: rgba(10, 23, 38, 0.85);
+  color: var(--text-primary);
+  border: 1px solid rgba(118, 240, 255, 0.22);
+}
+
+@keyframes scanBeam {
+  0% {
+    top: 0;
+  }
+  50% {
+    top: 100%;
+  }
+  100% {
+    top: 0;
+  }
+}
+
+@media (max-width: 900px) {
+  .calibration-card__hero,
+  .calibration-card__stats,
+  .calibration-card__controls {
+    grid-template-columns: 1fr;
+  }
+
+  .calibration-panel__header,
+  .calibration-card__header,
+  .calibration-card__actions,
+  .calibration-panel__header-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .calibration-panel {
+    width: calc(100vw - 2rem);
+  }
+
+  .hud__scoreboard,
+  .hud__debug {
+    left: 1rem;
+    right: 1rem;
+    width: auto;
+  }
+
+  .hud__scoreboard {
+    top: 1rem;
+    bottom: auto;
+    padding: 0.78rem;
+  }
+
+  .hud__scoreboard--pulse {
+    transform: scale(1.01);
+  }
+
+  .hud__scoreboard-header,
+  .hud__scoreboard-actions,
+  .hud__scoreboard-meta {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .hud__frames {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+
+  .hud__debug {
+    top: auto;
+    bottom: 1rem;
+  }
 }

@@ -1,95 +1,84 @@
-import React, { Suspense } from 'react';
+import React, { Suspense, lazy } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { Physics } from '@react-three/cannon';
-import { OrbitControls, Stars, Environment } from '@react-three/drei';
-import Lane from './Lane';
+import { Environment, Stars } from '@react-three/drei';
 import HoloLane from './HoloLane';
 import Pins from './Pins';
 import Ball from './Ball';
 import Trajectory from './Trajectory';
-import HandTracker from './HandTracker';
 import HUD from './HUD';
 import Calibration from './Calibration';
 import Effects from './Effects';
 import Particles from './Particles';
 import useGameStore from '../store/gameStore';
 
+const HandTracker = lazy(() => import('./HandTracker'));
+
 const PhysicsWorld = () => {
-    const { calibration } = useGameStore();
-    
-    // Apply calibration transform to the entire world
-    return (
-        <group 
-            position={[0, calibration.height, 0]} 
-            rotation={[calibration.rotationX, 0, 0]}
-            scale={calibration.scale}
-        >
-            <Physics 
-                gravity={[0, -12, 0]} // Slightly stronger gravity for "heavy" feel
-                defaultContactMaterial={{ restitution: 0.3, friction: 0.1 }}
-            >
-              <HoloLane />
-              <Pins />
-              <Ball />
-              <Trajectory />
-              <Particles />
-              {/* Shadow Plane for Realism - Make invisible but receive shadows */}
-              <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.05, 0]} receiveShadow>
-                  <planeGeometry args={[100, 100]} />
-                  <shadowMaterial transparent opacity={0.4} />
-              </mesh>
-            </Physics>
-        </group>
-    );
+  const calibration = useGameStore((state) => state.calibration);
+  const ballSize = useGameStore((state) => state.gameSettings.ballSize);
+
+  return (
+    <group
+      position={[0, calibration.height, 0]}
+      rotation={[calibration.rotationX, 0, 0]}
+      scale={calibration.scale}
+    >
+      <Physics
+        gravity={[0, -12, 0]}
+        defaultContactMaterial={{ restitution: 0.02, friction: 0.28 }}
+      >
+        <HoloLane />
+        <Pins />
+        <Ball key={`ball-${ballSize}`} />
+        <Trajectory />
+        <Particles />
+        <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.05, 0]} receiveShadow>
+          <planeGeometry args={[100, 100]} />
+          <shadowMaterial transparent opacity={0.25} />
+        </mesh>
+      </Physics>
+    </group>
+  );
 };
 
 const GameScene = () => {
   return (
-    <>
-      <HandTracker />
+    <div className="scene-shell">
+      <div className="scene-shell__backdrop" />
+      <Suspense fallback={null}>
+        <HandTracker />
+      </Suspense>
       <HUD />
       <Calibration />
-      <div style={{ width: '100vw', height: '100vh', background: 'transparent' }}>
-        <Canvas 
-            gl={{ alpha: true, antialias: true, stencil: false, depth: true }} 
-            camera={{ position: [0, 0, 0], fov: 75 }} // Camera at origin (user eye/webcam)
-            shadows
-            dpr={[1, 2]}
+      <div className="scene-shell__canvas">
+        <Canvas
+          gl={{ alpha: true, antialias: true, stencil: false, depth: true }}
+          camera={{ position: [0, 0, 0.01], fov: 75 }}
+          shadows
+          dpr={[1, 2]}
         >
-          {/* Transparent background for Mixed Reality */}
-          
           <Suspense fallback={null}>
-            {/* High Contrast Neon Lighting */}
-            <ambientLight intensity={0.2} /> {/* Darker ambient for contrast */}
-            
-            {/* Key Light (Cyan) */}
+            <ambientLight intensity={0.2} />
             <pointLight position={[5, 2, 0]} intensity={100} color="#00ffff" distance={15} decay={2} />
-            
-            {/* Fill Light (Magenta) */}
             <pointLight position={[-5, 2, -10]} intensity={100} color="#ff00ff" distance={20} decay={2} />
-            
-            {/* Rim Light (White/Blue) */}
-            <spotLight 
-                position={[0, 10, -5]} 
-                angle={0.5} 
-                penumbra={1} 
-                intensity={200} 
-                color="#ffffff" 
-                castShadow 
-                shadow-bias={-0.0001}
+            <spotLight
+              position={[0, 10, -5]}
+              angle={0.5}
+              penumbra={1}
+              intensity={200}
+              color="#ffffff"
+              castShadow
+              shadow-bias={-0.0001}
             />
-
-            {/* Minimal Stars for atmosphere, but sparse enough to see room */}
             <Stars radius={100} depth={50} count={1000} factor={4} saturation={0} fade speed={1} />
-
             <PhysicsWorld />
-            
             <Effects />
             <Environment preset="warehouse" />
           </Suspense>
         </Canvas>
       </div>
-    </>
+    </div>
   );
 };
 
