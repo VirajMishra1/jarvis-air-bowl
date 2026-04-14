@@ -40,6 +40,70 @@ button {
   font: inherit;
 }
 
+.app-fallback {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 1.5rem;
+  background:
+    radial-gradient(circle at top, rgba(37, 231, 255, 0.12), transparent 35%),
+    radial-gradient(circle at bottom, rgba(255, 107, 74, 0.16), transparent 38%),
+    linear-gradient(180deg, #050914 0%, #02040a 100%);
+}
+
+.app-fallback__panel {
+  width: min(30rem, 100%);
+  padding: 1.25rem 1.35rem;
+  border-radius: 1.2rem;
+  border: 1px solid rgba(118, 240, 255, 0.18);
+  background: rgba(8, 16, 28, 0.88);
+  box-shadow: var(--panel-shadow);
+  backdrop-filter: blur(14px);
+}
+
+.app-fallback__eyebrow {
+  margin: 0 0 0.7rem;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.app-fallback__title {
+  margin: 0;
+  font-family: 'Orbitron', sans-serif;
+  font-size: clamp(1.3rem, 4vw, 2rem);
+  line-height: 1.15;
+}
+
+.app-fallback__copy,
+.app-fallback__detail {
+  margin: 0.8rem 0 0;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+.app-fallback__detail {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.84rem;
+  color: rgba(255, 214, 206, 0.9);
+}
+
+.app-fallback__button {
+  margin-top: 1rem;
+  border: 0;
+  border-radius: 999px;
+  padding: 0.78rem 1rem;
+  background: linear-gradient(135deg, var(--accent-cyan), #77fff1);
+  color: #041018;
+  font-family: 'Orbitron', sans-serif;
+  font-size: 0.82rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
 .scene-shell,
 .scene-shell__canvas,
 .camera-layer,

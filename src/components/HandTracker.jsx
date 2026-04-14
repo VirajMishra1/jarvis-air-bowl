@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
-import { Hands } from '@mediapipe/hands';
-import { Pose } from '@mediapipe/pose';
+import * as mpHands from '@mediapipe/hands';
+import * as mpPose from '@mediapipe/pose';
 import useGameStore, { BASE_LANE_SCALE, ballSizeFromLaneScale } from '../store/gameStore';
 import { buildThrowProfile } from '../lib/bowlingPhysics';
 
@@ -14,6 +14,22 @@ const defaultHandData = {
 };
 
 const distance2D = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+
+const resolveMediaPipeConstructor = (moduleNamespace, key) => {
+  if (typeof moduleNamespace?.[key] === 'function') {
+    return moduleNamespace[key];
+  }
+
+  if (typeof moduleNamespace?.default?.[key] === 'function') {
+    return moduleNamespace.default[key];
+  }
+
+  if (typeof globalThis?.[key] === 'function') {
+    return globalThis[key];
+  }
+
+  throw new Error(`${key} failed to initialize from the MediaPipe bundle.`);
+};
 
 const HandTracker = () => {
   const videoRef = useRef(null);
@@ -151,7 +167,10 @@ const HandTracker = () => {
     let processing = false;
     let stream;
 
-    const hands = new Hands({
+    const HandsSolution = resolveMediaPipeConstructor(mpHands, 'Hands');
+    const PoseSolution = resolveMediaPipeConstructor(mpPose, 'Pose');
+
+    const hands = new HandsSolution({
       locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`,
     });
 
@@ -168,7 +187,7 @@ const HandTracker = () => {
       }
     });
 
-    const pose = new Pose({
+    const pose = new PoseSolution({
       locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`,
     });
 

@@ -1,4 +1,4 @@
-import React, { Suspense, lazy } from 'react';
+import React, { Suspense } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { Physics } from '@react-three/cannon';
 import { Environment, Stars } from '@react-three/drei';
@@ -10,9 +10,8 @@ import HUD from './HUD';
 import Calibration from './Calibration';
 import Effects from './Effects';
 import Particles from './Particles';
+import HandTracker from './HandTracker';
 import useGameStore from '../store/gameStore';
-
-const HandTracker = lazy(() => import('./HandTracker'));
 
 const PhysicsWorld = () => {
   const calibration = useGameStore((state) => state.calibration);
@@ -46,9 +45,7 @@ const GameScene = () => {
   return (
     <div className="scene-shell">
       <div className="scene-shell__backdrop" />
-      <Suspense fallback={null}>
-        <HandTracker />
-      </Suspense>
+      <HandTracker />
       <HUD />
       <Calibration />
       <div className="scene-shell__canvas">
