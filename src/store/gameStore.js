@@ -5,6 +5,13 @@ export const MIN_BALL_SIZE = 0.41;
 export const ballSizeFromLaneScale = (scale) => Math.max(0.23 * scale, MIN_BALL_SIZE);
 
 const FULL_PIN_IDS = Array.from({ length: 10 }, (_, index) => index);
+const defaultCelebration = {
+  active: false,
+  type: null,
+  label: '',
+  frame: 0,
+  nonce: 0,
+};
 
 const defaultHandState = {
   present: false,
@@ -178,6 +185,7 @@ const useGameStore = create((set) => ({
   trackingStatus: 'idle',
   trackingError: '',
   debugEnabled: false,
+  celebration: defaultCelebration,
   ...createBowlingState(),
 
   updateHands: (right, left) =>
@@ -201,6 +209,12 @@ const useGameStore = create((set) => ({
   setTrackingStatus: (trackingStatus) => set({ trackingStatus }),
   setTrackingError: (trackingError) => set({ trackingError }),
   toggleDebug: () => set((state) => ({ debugEnabled: !state.debugEnabled })),
+  dismissCelebration: () =>
+    set((state) => ({
+      celebration: state.celebration.active
+        ? { ...state.celebration, active: false }
+        : state.celebration,
+    })),
 
   setGameStatus: (status) => set({ gameStatus: status }),
   setBallState: (state) => set({ ballState: state }),
@@ -213,6 +227,7 @@ const useGameStore = create((set) => ({
       activeHand: null,
       pinScaleLocked: true,
       calibration: { ...state.calibration, active: false },
+      celebration: defaultCelebration,
       ...createBowlingState(),
     })),
 
@@ -223,6 +238,7 @@ const useGameStore = create((set) => ({
       activeHand: null,
       pinScaleLocked: true,
       calibration: { ...state.calibration, active: false },
+      celebration: defaultCelebration,
       ...createBowlingState(),
     })),
 
@@ -234,6 +250,7 @@ const useGameStore = create((set) => ({
       ballVelocity: [0, 0, 0],
       ballSpin: [0, 0, 0],
       ballPosition: [0, 0.5, 5],
+      celebration: defaultCelebration,
       ...createBowlingState({ pinRackId: state.pinRackId + 1 }),
     })),
 
@@ -248,6 +265,7 @@ const useGameStore = create((set) => ({
       ballVelocity: [0, 0, 0],
       ballSpin: [0, 0, 0],
       ballPosition: [0, 0.5, 5],
+      celebration: defaultCelebration,
       ...createBowlingState(),
     })),
 
@@ -293,6 +311,39 @@ const useGameStore = create((set) => ({
       const currentRolls = nextFrames[frameIndex].rolls;
       const scoreboard = buildScoreboard(nextFrames);
       const score = getTotalScore(scoreboard);
+      const priorRolls = currentRolls.slice(0, -1);
+      let celebration = defaultCelebration;
+
+      if (pinsDown === 10) {
+        celebration = {
+          active: true,
+          type: 'strike',
+          label: 'STRIKE',
+          frame: frameIndex + 1,
+          nonce: state.celebration.nonce + 1,
+        };
+      } else {
+        const isStandardSpare =
+          priorRolls.length === 1 &&
+          priorRolls[0] < 10 &&
+          priorRolls[0] + pinsDown === 10;
+        const isTenthFillSpare =
+          frameIndex === 9 &&
+          priorRolls.length === 2 &&
+          priorRolls[0] === 10 &&
+          priorRolls[1] < 10 &&
+          priorRolls[1] + pinsDown === 10;
+
+        if (isStandardSpare || isTenthFillSpare) {
+          celebration = {
+            active: true,
+            type: 'spare',
+            label: 'SPARE',
+            frame: frameIndex + 1,
+            nonce: state.celebration.nonce + 1,
+          };
+        }
+      }
 
       let currentFrame = frameIndex;
       let standingPinIds = state.standingPinIds.filter((pinId) => !uniqueKnocked.includes(pinId));
@@ -378,6 +429,7 @@ const useGameStore = create((set) => ({
         activeHand: null,
         ballVelocity: [0, 0, 0],
         ballSpin: [0, 0, 0],
+        celebration,
       };
     }),
 
@@ -396,6 +448,7 @@ const useGameStore = create((set) => ({
       calibration: defaultCalibration,
       trackingStatus: 'idle',
       trackingError: '',
+      celebration: defaultCelebration,
       ...createBowlingState(),
     })),
 }));

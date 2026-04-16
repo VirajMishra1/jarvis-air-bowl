@@ -10,6 +10,7 @@ import HUD from './HUD';
 import Calibration from './Calibration';
 import Effects from './Effects';
 import Particles from './Particles';
+import Celebration from './Celebration';
 import HandTracker from './HandTracker';
 import useGameStore from '../store/gameStore';
 
@@ -37,6 +38,7 @@ const PhysicsWorld = () => {
           <shadowMaterial transparent opacity={0.25} />
         </mesh>
       </Physics>
+      <Celebration />
     </group>
   );
 };

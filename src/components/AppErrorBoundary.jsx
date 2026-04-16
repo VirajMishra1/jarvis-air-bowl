@@ -1,5 +1,13 @@
 import React from 'react';
 
+const shouldExposeErrorDetail = () => {
+  if (typeof window === 'undefined') {
+    return false;
+  }
+
+  return ['localhost', '127.0.0.1'].includes(window.location.hostname);
+};
+
 class AppErrorBoundary extends React.Component {
   constructor(props) {
     super(props);
@@ -35,7 +43,9 @@ class AppErrorBoundary extends React.Component {
               Reload once and allow camera access if the browser asks. If this keeps happening,
               the page is still loading but one startup component is failing.
             </p>
-            <p className="app-fallback__detail">{this.state.message}</p>
+            {shouldExposeErrorDetail() ? (
+              <p className="app-fallback__detail">{this.state.message}</p>
+            ) : null}
             <button type="button" className="app-fallback__button" onClick={this.handleReload}>
               Reload
             </button>

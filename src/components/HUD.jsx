@@ -42,6 +42,7 @@ const HUD = () => {
   const currentFrame = useGameStore((state) => state.currentFrame);
   const gameStatus = useGameStore((state) => state.gameStatus);
   const ballState = useGameStore((state) => state.ballState);
+  const activeHand = useGameStore((state) => state.activeHand);
   const pose = useGameStore((state) => state.pose);
   const calibrationActive = useGameStore((state) => state.calibration.active);
   const trackingStatus = useGameStore((state) => state.trackingStatus);
@@ -157,6 +158,22 @@ const HUD = () => {
     );
   };
 
+  const reticleHand = useMemo(() => {
+    if (activeHand === 'left' && leftHand.present) {
+      return leftHand;
+    }
+    if (activeHand === 'right' && rightHand.present) {
+      return rightHand;
+    }
+    if (rightHand.present) {
+      return rightHand;
+    }
+    if (leftHand.present) {
+      return leftHand;
+    }
+    return null;
+  }, [activeHand, leftHand, rightHand]);
+
   return (
     <div className="hud">
       <HandOverlay />
@@ -204,13 +221,13 @@ const HUD = () => {
             </div>
           </section>
 
-          {rightHand.present && (
+          {reticleHand && (
             <div
               className="hud__reticle"
               style={{
-                left: `${(1 - rightHand.position.x) * 100}%`,
-                top: `${rightHand.position.y * 100}%`,
-                '--reticle-color': rightHand.gesture === 'FIST' ? '#ff6b4a' : '#25e7ff',
+                left: `${(1 - reticleHand.position.x) * 100}%`,
+                top: `${reticleHand.position.y * 100}%`,
+                '--reticle-color': reticleHand.gesture === 'FIST' ? '#ff6b4a' : '#25e7ff',
               }}
             />
           )}
