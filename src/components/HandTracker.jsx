@@ -14,6 +14,7 @@ const defaultHandData = {
 };
 
 const distance2D = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+const isGrabGesture = (gesture) => gesture === 'FIST' || gesture === 'UNKNOWN';
 
 const resolveMediaPipeConstructor = (moduleNamespace, key) => {
   if (typeof moduleNamespace?.[key] === 'function') {
@@ -113,6 +114,21 @@ const HandTracker = () => {
     };
   };
 
+  const normalizeReleaseForThrow = (release) => ({
+    speed: Math.max(release.speed, 0.9),
+    roll: release.roll,
+    averagedVelocity: {
+      x: release.averagedVelocity.x * 0.18,
+      y: Math.max(release.averagedVelocity.y, 0.24),
+      z: release.averagedVelocity.z * 0.45,
+    },
+    peakVelocity: {
+      x: release.peakVelocity.x * 0.12,
+      y: Math.max(release.peakVelocity.y, 0.44),
+      z: release.peakVelocity.z * 0.45,
+    },
+  });
+
   const triggerThrow = (hand, release) => {
     const ballSize = useGameStore.getState().gameSettings.ballSize;
     const { vector, spin, launchPosition } = buildThrowProfile(hand.position, release, ballSize);
@@ -140,9 +156,13 @@ const HandTracker = () => {
     };
 
     if (activeHand === 'right' && historyRefRight.current.length > 0) {
-      release = armedThrowRefRight.current?.release || getReleaseMetrics(historyRefRight.current);
+      release =
+        armedThrowRefRight.current?.release ||
+        normalizeReleaseForThrow(getReleaseMetrics(historyRefRight.current));
     } else if (activeHand === 'left' && historyRefLeft.current.length > 0) {
-      release = armedThrowRefLeft.current?.release || getReleaseMetrics(historyRefLeft.current);
+      release =
+        armedThrowRefLeft.current?.release ||
+        normalizeReleaseForThrow(getReleaseMetrics(historyRefLeft.current));
     }
 
     let hand = { position: { x: 0.5, y: 0.5 } };
@@ -357,34 +377,43 @@ const HandTracker = () => {
   };
 
   const shouldArmRelease = (handData, release) => {
-    const downwardSwing = release.averagedVelocity.y > 0.28 || release.peakVelocity.y > 0.48;
-    const movingWithIntent = release.speed > 0.8;
-    const releaseZone = handData.position.y > 0.34;
+    const downwardSwing = release.averagedVelocity.y > 0.2 || release.peakVelocity.y > 0.36;
+    const movingWithIntent = release.speed > 0.64;
+    const releaseZone = handData.position.y > 0.28;
     return movingWithIntent && downwardSwing && releaseZone;
   };
 
   const shouldReleaseBall = (gesture, wasGrabbing, armedRef, armedAtRef, handData, release) => {
     const now = Date.now();
+    const armedDuration = now - armedAtRef.current;
     const openRelease = gesture === 'OPEN' || (gesture === 'UNKNOWN' && wasGrabbing);
-    const withinWindow = now - armedAtRef.current < 950;
-    const strongFollowThrough =
-      release.speed > 1.45 &&
-      (release.peakVelocity.y > 0.62 || release.averagedVelocity.y > 0.34) &&
-      handData.position.y > 0.42;
+    const withinWindow = armedDuration < 1450;
+    const releaseZone = handData.position.y > 0.36;
+    const followThrough =
+      release.speed > 0.72 &&
+      (release.peakVelocity.y > 0.34 || release.averagedVelocity.y > 0.18) &&
+      releaseZone;
+    const committedSwing =
+      release.speed > 0.9 &&
+      (release.peakVelocity.y > 0.4 || release.averagedVelocity.y > 0.22) &&
+      handData.position.y > 0.4;
 
     if (armedRef.current && withinWindow) {
-      const hasFollowThrough =
-        release.speed > 0.55 ||
-        release.peakVelocity.y > 0.35 ||
-        release.averagedVelocity.y > 0.18 ||
-        handData.position.y > 0.38;
+      const hasFollowThrough = followThrough || handData.position.y > 0.33;
 
       if (openRelease && hasFollowThrough) {
         armedRef.current = false;
         return true;
       }
 
-      if (gesture !== 'FIST' && strongFollowThrough) {
+      if (gesture !== 'FIST' && followThrough) {
+        armedRef.current = false;
+        return true;
+      }
+
+      // Fallback for imperfect gesture reads: once the swing is clearly committed,
+      // let the ball go even if the fist/open transition wasn't recognized.
+      if (armedDuration > 90 && committedSwing) {
         armedRef.current = false;
         return true;
       }
@@ -467,9 +496,8 @@ const HandTracker = () => {
       return;
     }
 
-    const isGrabbing = handData.gesture === 'FIST' || handData.gesture === 'UNKNOWN';
-    const wasGrabbing =
-      lastGestureRef.current === 'FIST' || lastGestureRef.current === 'UNKNOWN';
+    const isGrabbing = isGrabGesture(handData.gesture);
+    const wasGrabbing = isGrabGesture(lastGestureRef.current);
 
     if (nextBallState === 'LOCKED' && isGrabbing && !nextActiveHand) {
       setNextActiveHand(side);
@@ -490,20 +518,21 @@ const HandTracker = () => {
     }
 
     if (useGameStore.getState().activeHand === side || nextActiveHand === side) {
-      const release = getReleaseMetrics(historyRef.current);
+      const rawRelease = getReleaseMetrics(historyRef.current);
+      const throwRelease = normalizeReleaseForThrow(rawRelease);
 
       if ((useGameStore.getState().ballState === 'HELD' || nextBallState === 'HELD') && isGrabbing) {
-        if (shouldArmRelease(handData, release)) {
+        if (shouldArmRelease(handData, rawRelease)) {
           if (!releaseArmedRef.current) {
             releaseArmedRef.current = true;
             releaseArmedAtRef.current = Date.now();
             const snapshot = {
               position: { ...handData.position },
               release: {
-                speed: release.speed,
-                roll: release.roll,
-                averagedVelocity: { ...release.averagedVelocity },
-                peakVelocity: { ...release.peakVelocity },
+                speed: throwRelease.speed,
+                roll: throwRelease.roll,
+                averagedVelocity: { ...throwRelease.averagedVelocity },
+                peakVelocity: { ...throwRelease.peakVelocity },
               },
             };
 
@@ -529,7 +558,7 @@ const HandTracker = () => {
           releaseArmedRef,
           releaseArmedAtRef,
           handData,
-          release,
+          rawRelease,
         )
       ) {
         executeThrow();
@@ -578,7 +607,8 @@ const HandTracker = () => {
           assignment.right.handData.landmarks,
           historyRefRight,
         );
-        const release = getReleaseMetrics(historyRefRight.current);
+        const rawRelease = getReleaseMetrics(historyRefRight.current);
+        const release = normalizeReleaseForThrow(rawRelease);
         rightHandData = {
           ...assignment.right.handData,
           speed,
@@ -594,7 +624,8 @@ const HandTracker = () => {
           assignment.left.handData.landmarks,
           historyRefLeft,
         );
-        const release = getReleaseMetrics(historyRefLeft.current);
+        const rawRelease = getReleaseMetrics(historyRefLeft.current);
+        const release = normalizeReleaseForThrow(rawRelease);
         leftHandData = {
           ...assignment.left.handData,
           speed,
@@ -602,6 +633,34 @@ const HandTracker = () => {
           release: armedThrowRefLeft.current?.release || release,
           releasePosition: armedThrowRefLeft.current?.position || null,
         };
+      }
+
+      const rightIsGrabbing = rightHandData.present && isGrabGesture(rightHandData.gesture);
+      const leftIsGrabbing = leftHandData.present && isGrabGesture(leftHandData.gesture);
+      const exclusiveGrabSide =
+        rightIsGrabbing !== leftIsGrabbing ? (rightIsGrabbing ? 'right' : 'left') : null;
+
+      if (
+        gameStatus === 'PLAYING' &&
+        exclusiveGrabSide &&
+        (nextBallState === 'LOCKED' || nextBallState === 'HELD') &&
+        nextActiveHand !== exclusiveGrabSide
+      ) {
+        const currentActiveData =
+          nextActiveHand === 'left' ? leftHandData : nextActiveHand === 'right' ? rightHandData : null;
+        const activeStillGrabbing = currentActiveData?.present && isGrabGesture(currentActiveData.gesture);
+        const canTransferOwnership = nextBallState === 'LOCKED' || !activeStillGrabbing;
+
+        if (canTransferOwnership) {
+          nextActiveHand = exclusiveGrabSide;
+          nextBallState = 'HELD';
+          setActiveHand(exclusiveGrabSide);
+          setBallState('HELD');
+          releaseArmedRefRight.current = false;
+          releaseArmedRefLeft.current = false;
+          armedThrowRefRight.current = null;
+          armedThrowRefLeft.current = null;
+        }
       }
 
       updateTrackedHand({
