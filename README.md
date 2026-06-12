@@ -2,6 +2,8 @@
 
 Jarvis Air Bowl is a gesture-controlled mixed-reality bowling prototype built with React, Vite, Three.js, React Three Fiber, Cannon physics, Zustand, and MediaPipe hand/pose tracking.
 
+Play the live deployment at [https://jarvis-air-bowl.vercel.app](https://jarvis-air-bowl.vercel.app) (requires a webcam).
+
 ## Stack
 
 - React 18 + Vite 5
